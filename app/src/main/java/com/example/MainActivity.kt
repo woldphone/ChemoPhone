@@ -38,14 +38,14 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.BluetoothSearching
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Bluetooth
-import androidx.compose.material.icons.filled.BluetoothSearching
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -312,7 +312,7 @@ fun HeaderBar() {
             contentAlignment = Alignment.Center
         ) {
             Icon(
-                imageVector = Icons.Default.BluetoothSearching,
+                imageVector = Icons.AutoMirrored.Filled.BluetoothSearching,
                 contentDescription = "Beacon Icon",
                 tint = BeaconCyan,
                 modifier = Modifier.size(22.dp)
@@ -809,7 +809,7 @@ fun TestControlsCard(
                     colors = ButtonDefaults.buttonColors(containerColor = BeaconCyan.copy(alpha = 0.2f)),
                     border = androidx.compose.foundation.BorderStroke(1.dp, BeaconCyan)
                 ) {
-                    Icon(imageVector = Icons.Default.VolumeUp, contentDescription = null, tint = BeaconCyan, modifier = Modifier.size(18.dp))
+                    Icon(imageVector = Icons.AutoMirrored.Filled.VolumeUp, contentDescription = null, tint = BeaconCyan, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(6.dp))
                     Text("Test Alarm", color = BeaconCyan, fontWeight = FontWeight.Bold)
                 }
