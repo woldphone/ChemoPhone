@@ -1,0 +1,1070 @@
+package com.example
+
+import android.Manifest
+import android.content.Context
+import android.content.pm.PackageManager
+import android.os.Build
+import android.os.Bundle
+import android.widget.Toast
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.viewModels
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Bluetooth
+import androidx.compose.material.icons.filled.BluetoothSearching
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.NotificationsActive
+import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.VolumeUp
+import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
+import com.example.data.Constants
+import com.example.data.LogEntry
+import com.example.ui.MainViewModel
+import com.example.ui.theme.BeaconAmber
+import com.example.ui.theme.BeaconCyan
+import com.example.ui.theme.BeaconCyanGlow
+import com.example.ui.theme.BeaconEmerald
+import com.example.ui.theme.BeaconNavyCard
+import com.example.ui.theme.BeaconNavyDark
+import com.example.ui.theme.BeaconRed
+import com.example.ui.theme.BeaconRedDark
+import com.example.ui.theme.BeaconTextLight
+import com.example.ui.theme.BeaconTextMuted
+import com.example.ui.theme.MyApplicationTheme
+
+class MainActivity : ComponentActivity() {
+
+    private val viewModel: MainViewModel by viewModels()
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
+        viewModel.loadPreferences(this)
+
+        setContent {
+            MyApplicationTheme {
+                FinderAppScreen(viewModel = viewModel)
+            }
+        }
+    }
+}
+
+@Composable
+fun FinderAppScreen(viewModel: MainViewModel) {
+    val context = LocalContext.current
+
+    val isServiceRunning by viewModel.isServiceRunning.collectAsState()
+    val isAdvertising by viewModel.isAdvertising.collectAsState()
+    val isGattActive by viewModel.isGattActive.collectAsState()
+    val isAcousticListening by viewModel.isAcousticListening.collectAsState()
+    val isAlarmRinging by viewModel.isAlarmRinging.collectAsState()
+    val verifiedTriggersCount by viewModel.verifiedTriggersCount.collectAsState()
+    val rejectedAttemptsCount by viewModel.rejectedAttemptsCount.collectAsState()
+    val logs by viewModel.logs.collectAsState()
+    val savedPasscodeHex by viewModel.passcodeHex.collectAsState()
+
+    var passcodeInput by remember(savedPasscodeHex) { mutableStateOf(savedPasscodeHex) }
+    var hasPermissions by remember { mutableStateOf(checkRequiredPermissions(context)) }
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) {
+        hasPermissions = checkRequiredPermissions(context)
+        if (!hasPermissions) {
+            Toast.makeText(context, "Permissions are required for BLE advertising and audio alert", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        if (!hasPermissions) {
+            permissionLauncher.launch(getRequiredPermissionsList())
+        }
+    }
+
+    Scaffold(
+        modifier = Modifier
+            .fillMaxSize()
+            .testTag("finder_screen"),
+        containerColor = BeaconNavyDark
+    ) { innerPadding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+                .padding(horizontal = 16.dp)
+        ) {
+            Spacer(modifier = Modifier.height(12.dp))
+            HeaderBar()
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            if (!hasPermissions) {
+                PermissionWarningCard(
+                    onRequestPermissions = {
+                        permissionLauncher.launch(getRequiredPermissionsList())
+                    }
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+            }
+
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                // Status Card
+                item {
+                    StatusOverviewCard(
+                        isServiceRunning = isServiceRunning,
+                        isAdvertising = isAdvertising,
+                        isGattActive = isGattActive,
+                        isAcousticListening = isAcousticListening,
+                        isAlarmRinging = isAlarmRinging,
+                        verifiedCount = verifiedTriggersCount,
+                        rejectedCount = rejectedAttemptsCount
+                    )
+                }
+
+                // Emergency Stop Alarm Card
+                if (isAlarmRinging) {
+                    item {
+                        EmergencyStopCard(
+                            onStopAlarm = { viewModel.stopAlarm(context) }
+                        )
+                    }
+                }
+
+                // Service Toggle Card
+                item {
+                    ControlToggleCard(
+                        title = "BLE Beacon & GATT Server",
+                        subtitle = "Broadcast connectable BLE packets and host GATT verification server offline.",
+                        icon = Icons.Default.Bluetooth,
+                        isChecked = isServiceRunning,
+                        accentColor = BeaconCyan,
+                        testTag = "toggle_ble_service",
+                        onCheckedChange = { enable ->
+                            if (!hasPermissions) {
+                                permissionLauncher.launch(getRequiredPermissionsList())
+                            } else {
+                                viewModel.toggleService(context, enable)
+                            }
+                        }
+                    )
+                }
+
+                // Secondary Fail-Safe Acoustic Toggle Card
+                item {
+                    ControlToggleCard(
+                        title = "Secondary Acoustic Finder",
+                        subtitle = "Background mic listener for sharp clap/whistle peaks (no internet required).",
+                        icon = Icons.Default.Mic,
+                        isChecked = isAcousticListening,
+                        accentColor = BeaconAmber,
+                        testTag = "toggle_acoustic_detector",
+                        onCheckedChange = { enable ->
+                            if (!hasPermissions) {
+                                permissionLauncher.launch(getRequiredPermissionsList())
+                            } else {
+                                if (!isServiceRunning && enable) {
+                                    viewModel.toggleService(context, true)
+                                }
+                                viewModel.toggleAcoustic(context, enable)
+                            }
+                        }
+                    )
+                }
+
+                // Security Passcode & GATT Details
+                item {
+                    SecurityConfigCard(
+                        passcodeHex = passcodeInput,
+                        onPasscodeChange = { passcodeInput = it },
+                        onSavePasscode = {
+                            viewModel.updatePasscode(context, passcodeInput)
+                            Toast.makeText(context, "Passcode updated to 0x${passcodeInput.uppercase()}", Toast.LENGTH_SHORT).show()
+                        }
+                    )
+                }
+
+                // Test & Trigger Controls
+                item {
+                    TestControlsCard(
+                        isRinging = isAlarmRinging,
+                        onTestAlarm = { viewModel.testAlarm(context) },
+                        onStopAlarm = { viewModel.stopAlarm(context) }
+                    )
+                }
+
+                // How-To Discovery Guide
+                item {
+                    DiscoveryGuideCard(passcodeHex = savedPasscodeHex)
+                }
+
+                // System Logs Terminal
+                item {
+                    LogsTerminalCard(
+                        logs = logs,
+                        onClearLogs = { viewModel.clearLogs() }
+                    )
+                }
+
+                item {
+                    Spacer(modifier = Modifier.height(24.dp))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun HeaderBar() {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Column {
+            Text(
+                text = "OFFLINE PHONE FINDER",
+                style = MaterialTheme.typography.labelSmall,
+                color = BeaconCyanGlow,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 1.5.sp
+            )
+            Text(
+                text = "Local Beacon & Security GATT",
+                style = MaterialTheme.typography.titleMedium,
+                color = BeaconTextLight,
+                fontWeight = FontWeight.SemiBold
+            )
+        }
+        
+        Box(
+            modifier = Modifier
+                .size(40.dp)
+                .clip(CircleShape)
+                .background(BeaconNavyCard)
+                .border(1.dp, BeaconCyan.copy(alpha = 0.5f), CircleShape),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = Icons.Default.BluetoothSearching,
+                contentDescription = "Beacon Icon",
+                tint = BeaconCyan,
+                modifier = Modifier.size(22.dp)
+            )
+        }
+    }
+}
+
+@Composable
+fun StatusOverviewCard(
+    isServiceRunning: Boolean,
+    isAdvertising: Boolean,
+    isGattActive: Boolean,
+    isAcousticListening: Boolean,
+    isAlarmRinging: Boolean,
+    verifiedCount: Int,
+    rejectedCount: Int
+) {
+    val infiniteTransition = rememberInfiniteTransition(label = "beacon_pulse")
+    val alphaAnim by infiniteTransition.animateFloat(
+        initialValue = 0.4f,
+        targetValue = 1.0f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(800),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "pulse_alpha"
+    )
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = BeaconNavyCard),
+        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(12.dp)
+                            .clip(CircleShape)
+                            .background(
+                                when {
+                                    isAlarmRinging -> BeaconRed.copy(alpha = alphaAnim)
+                                    isServiceRunning -> BeaconEmerald.copy(alpha = alphaAnim)
+                                    else -> BeaconTextMuted
+                                }
+                            )
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = when {
+                            isAlarmRinging -> "🚨 ALARM RINGING!"
+                            isServiceRunning -> "BEACON ACTIVE"
+                            else -> "STANDBY"
+                        },
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = when {
+                            isAlarmRinging -> BeaconRed
+                            isServiceRunning -> BeaconEmerald
+                            else -> BeaconTextMuted
+                        }
+                    )
+                }
+
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = BeaconNavyDark
+                ) {
+                    Text(
+                        text = "100% OFFLINE",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = BeaconCyanGlow,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                StatusIndicatorItem(
+                    label = "BLE Adv",
+                    value = if (isAdvertising) "Active" else "Off",
+                    isActive = isAdvertising
+                )
+                StatusIndicatorItem(
+                    label = "GATT",
+                    value = if (isGattActive) "Ready" else "Off",
+                    isActive = isGattActive
+                )
+                StatusIndicatorItem(
+                    label = "Acoustic",
+                    value = if (isAcousticListening) "Listening" else "Off",
+                    isActive = isAcousticListening
+                )
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(BeaconNavyDark)
+                    .padding(12.dp),
+                horizontalArrangement = Arrangement.SpaceAround
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        text = "$verifiedCount",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = BeaconEmerald
+                    )
+                    Text(
+                        text = "Verified Triggers",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = BeaconTextMuted
+                    )
+                }
+
+                Box(
+                    modifier = Modifier
+                        .width(1.dp)
+                        .height(32.dp)
+                        .background(BeaconNavyCard)
+                )
+
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        text = "$rejectedCount",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = if (rejectedCount > 0) BeaconRed else BeaconTextMuted
+                    )
+                    Text(
+                        text = "Rejected Payloads",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = BeaconTextMuted
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun StatusIndicatorItem(label: String, value: String, isActive: Boolean) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodySmall,
+            color = BeaconTextMuted
+        )
+        Spacer(modifier = Modifier.height(2.dp))
+        Text(
+            text = value,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Bold,
+            color = if (isActive) BeaconCyanGlow else BeaconTextMuted
+        )
+    }
+}
+
+@Composable
+fun EmergencyStopCard(onStopAlarm: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = BeaconRedDark),
+        elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.NotificationsActive,
+                    contentDescription = null,
+                    tint = BeaconTextLight,
+                    modifier = Modifier.size(28.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "ALARM SOUND & FLASH ACTIVE!",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = BeaconTextLight
+                )
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Button(
+                onClick = onStopAlarm,
+                colors = ButtonDefaults.buttonColors(containerColor = BeaconRed),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp)
+                    .testTag("stop_alarm_button")
+            ) {
+                Icon(imageVector = Icons.Default.Stop, contentDescription = null)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("SILENCE ALARM NOW", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            }
+        }
+    }
+}
+
+@Composable
+fun ControlToggleCard(
+    title: String,
+    subtitle: String,
+    icon: ImageVector,
+    isChecked: Boolean,
+    accentColor: Color,
+    testTag: String,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = BeaconNavyCard)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(44.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(accentColor.copy(alpha = 0.15f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = accentColor,
+                    modifier = Modifier.size(24.dp)
+                )
+            }
+
+            Spacer(modifier = Modifier.width(12.dp))
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = BeaconTextLight
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = BeaconTextMuted,
+                    lineHeight = 16.sp
+                )
+            }
+
+            Spacer(modifier = Modifier.width(8.dp))
+
+            Switch(
+                checked = isChecked,
+                onCheckedChange = onCheckedChange,
+                modifier = Modifier.testTag(testTag),
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = BeaconTextLight,
+                    checkedTrackColor = accentColor,
+                    uncheckedThumbColor = BeaconTextMuted,
+                    uncheckedTrackColor = BeaconNavyDark
+                )
+            )
+        }
+    }
+}
+
+@Composable
+fun SecurityConfigCard(
+    passcodeHex: String,
+    onPasscodeChange: (String) -> Unit,
+    onSavePasscode: () -> Unit
+) {
+    val clipboardManager = LocalClipboardManager.current
+    val context = LocalContext.current
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = BeaconNavyCard)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.Security,
+                    contentDescription = null,
+                    tint = BeaconCyan,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "GATT Security & Passcode Token",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = BeaconTextLight
+                )
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Text(
+                text = "Primary Service UUID:",
+                style = MaterialTheme.typography.bodySmall,
+                color = BeaconTextMuted
+            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(BeaconNavyDark)
+                    .clickable {
+                        clipboardManager.setText(AnnotatedString(Constants.SERVICE_UUID.toString()))
+                        Toast
+                            .makeText(context, "Service UUID copied", Toast.LENGTH_SHORT)
+                            .show()
+                    }
+                    .padding(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = Constants.SERVICE_UUID.toString(),
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = FontFamily.Monospace,
+                    color = BeaconCyanGlow,
+                    modifier = Modifier.weight(1f)
+                )
+                Text(
+                    text = "COPY",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = BeaconTextMuted,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Text(
+                text = "Write Characteristic UUID:",
+                style = MaterialTheme.typography.bodySmall,
+                color = BeaconTextMuted
+            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(BeaconNavyDark)
+                    .clickable {
+                        clipboardManager.setText(AnnotatedString(Constants.CHARACTERISTIC_UUID.toString()))
+                        Toast
+                            .makeText(context, "Characteristic UUID copied", Toast.LENGTH_SHORT)
+                            .show()
+                    }
+                    .padding(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = Constants.CHARACTERISTIC_UUID.toString(),
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = FontFamily.Monospace,
+                    color = BeaconCyanGlow,
+                    modifier = Modifier.weight(1f)
+                )
+                Text(
+                    text = "COPY",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = BeaconTextMuted,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Text(
+                text = "4-Byte Security Pre-shared Passcode (Hex):",
+                style = MaterialTheme.typography.bodySmall,
+                color = BeaconTextMuted
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(
+                    value = passcodeHex,
+                    onValueChange = { input ->
+                        val filtered = input.uppercase().filter { it in "0123456789ABCDEF" }.take(8)
+                        onPasscodeChange(filtered)
+                    },
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("input_passcode_hex"),
+                    singleLine = true,
+                    prefix = { Text("0x ", color = BeaconCyan, fontWeight = FontWeight.Bold) },
+                    textStyle = MaterialTheme.typography.bodyMedium.copy(
+                        fontFamily = FontFamily.Monospace,
+                        color = BeaconTextLight,
+                        fontWeight = FontWeight.Bold
+                    ),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = BeaconCyan,
+                        unfocusedBorderColor = BeaconNavyDark,
+                        focusedContainerColor = BeaconNavyDark,
+                        unfocusedContainerColor = BeaconNavyDark
+                    ),
+                    shape = RoundedCornerShape(8.dp)
+                )
+
+                Spacer(modifier = Modifier.width(8.dp))
+
+                Button(
+                    onClick = onSavePasscode,
+                    enabled = passcodeHex.length == 8,
+                    shape = RoundedCornerShape(8.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = BeaconCyan),
+                    modifier = Modifier.testTag("save_passcode_button")
+                ) {
+                    Text("SAVE", fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun TestControlsCard(
+    isRinging: Boolean,
+    onTestAlarm: () -> Unit,
+    onStopAlarm: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = BeaconNavyCard)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+        ) {
+            Text(
+                text = "Hardware Test Controls",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+                color = BeaconTextLight
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Button(
+                    onClick = onTestAlarm,
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(44.dp)
+                        .testTag("test_alarm_button"),
+                    shape = RoundedCornerShape(8.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = BeaconCyan.copy(alpha = 0.2f)),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, BeaconCyan)
+                ) {
+                    Icon(imageVector = Icons.Default.VolumeUp, contentDescription = null, tint = BeaconCyan, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Test Alarm", color = BeaconCyan, fontWeight = FontWeight.Bold)
+                }
+
+                if (isRinging) {
+                    Button(
+                        onClick = onStopAlarm,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(44.dp)
+                            .testTag("stop_alarm_card_button"),
+                        shape = RoundedCornerShape(8.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = BeaconRed)
+                    ) {
+                        Icon(imageVector = Icons.Default.Stop, contentDescription = null, tint = BeaconTextLight, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Stop Alarm", color = BeaconTextLight, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun DiscoveryGuideCard(passcodeHex: String) {
+    var isExpanded by remember { mutableStateOf(false) }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = BeaconNavyCard)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { isExpanded = !isExpanded },
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.Info,
+                        contentDescription = null,
+                        tint = BeaconCyanGlow,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "How to Locate This Phone Offline",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = BeaconTextLight
+                    )
+                }
+                Text(
+                    text = if (isExpanded) "Hide" else "Show Steps",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = BeaconCyan
+                )
+            }
+
+            AnimatedVisibility(visible = isExpanded) {
+                Column(modifier = Modifier.padding(top = 12.dp)) {
+                    GuideStep(number = "1", title = "Use Any BLE Scanner App", description = "Open nRF Connect or any BLE scanner on another phone or device nearby.")
+                    GuideStep(number = "2", title = "Scan for Service UUID", description = "Filter scan results for UUID: 12345678-abcd-1234-abcd-123456789abc.")
+                    GuideStep(number = "3", title = "Connect Directly", description = "Tap Connect. Since device MAC addresses rotate, discovery relies strictly on the Service UUID.")
+                    GuideStep(number = "4", title = "Write Security Token", description = "Locate Characteristic 87654321-abcd-4321-abcd-cba987654321. Write Byte Array payload 0x$passcodeHex.")
+                    GuideStep(number = "5", title = "High-Volume Sound & Flash Trigger", description = "Phone will immediately override Silent/DND modes, play siren sound at max volume, and strobe the camera LED!")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun GuideStep(number: String, title: String, description: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.Top
+    ) {
+        Box(
+            modifier = Modifier
+                .size(22.dp)
+                .clip(CircleShape)
+                .background(BeaconCyan.copy(alpha = 0.2f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(text = number, style = MaterialTheme.typography.labelSmall, color = BeaconCyan, fontWeight = FontWeight.Bold)
+        }
+        Spacer(modifier = Modifier.width(8.dp))
+        Column {
+            Text(text = title, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold, color = BeaconTextLight)
+            Text(text = description, style = MaterialTheme.typography.bodySmall, color = BeaconTextMuted, lineHeight = 15.sp)
+        }
+    }
+}
+
+@Composable
+fun LogsTerminalCard(logs: List<LogEntry>, onClearLogs: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = BeaconNavyCard)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = "Local System Logs",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = BeaconTextLight
+                )
+                if (logs.isNotEmpty()) {
+                    Text(
+                        text = "Clear",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = BeaconTextMuted,
+                        modifier = Modifier.clickable { onClearLogs() }
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 120.dp, max = 220.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(BeaconNavyDark)
+                    .padding(8.dp)
+            ) {
+                if (logs.isEmpty()) {
+                    Text(
+                        text = "No logs yet. Toggle BLE Service or trigger alarm to see real-time events.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = BeaconTextMuted,
+                        modifier = Modifier.align(Alignment.Center)
+                    )
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        items(logs) { log ->
+                            Row(verticalAlignment = Alignment.Top) {
+                                Text(
+                                    text = "[${log.timestamp}] ",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontFamily = FontFamily.Monospace,
+                                    color = BeaconTextMuted,
+                                    fontSize = 11.sp
+                                )
+                                Text(
+                                    text = log.message,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontFamily = FontFamily.Monospace,
+                                    color = when {
+                                        log.isError -> BeaconRed
+                                        log.isSuccess -> BeaconEmerald
+                                        else -> BeaconTextLight
+                                    },
+                                    fontSize = 11.sp
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun PermissionWarningCard(onRequestPermissions: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = BeaconAmber.copy(alpha = 0.15f)),
+        border = androidx.compose.foundation.BorderStroke(1.dp, BeaconAmber)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = Icons.Default.Warning,
+                contentDescription = null,
+                tint = BeaconAmber,
+                modifier = Modifier.size(28.dp)
+            )
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Permissions Required",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = BeaconAmber
+                )
+                Text(
+                    text = "Bluetooth Advertise/Connect, Location, Audio, and Camera permissions are needed for local discovery.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = BeaconTextLight
+                )
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+            Button(
+                onClick = onRequestPermissions,
+                colors = ButtonDefaults.buttonColors(containerColor = BeaconAmber),
+                shape = RoundedCornerShape(8.dp)
+            ) {
+                Text("GRANT", color = BeaconNavyDark, fontWeight = FontWeight.Bold)
+            }
+        }
+    }
+}
+
+private fun checkRequiredPermissions(context: Context): Boolean {
+    val list = getRequiredPermissionsList()
+    return list.all {
+        ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
+    }
+}
+
+private fun getRequiredPermissionsList(): Array<String> {
+    val list = mutableListOf(
+        Manifest.permission.ACCESS_FINE_LOCATION,
+        Manifest.permission.RECORD_AUDIO,
+        Manifest.permission.CAMERA
+    )
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        list.add(Manifest.permission.BLUETOOTH_ADVERTISE)
+        list.add(Manifest.permission.BLUETOOTH_CONNECT)
+        list.add(Manifest.permission.BLUETOOTH_SCAN)
+    }
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        list.add(Manifest.permission.POST_NOTIFICATIONS)
+    }
+    return list.toTypedArray()
+}

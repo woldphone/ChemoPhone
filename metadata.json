@@ -1,0 +1,6 @@
+{
+  "name": "Offline Phone Finder",
+  "description": "Locate a lost phone locally and offline using BLE advertising, custom GATT server security handshake, and local acoustic detection.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
