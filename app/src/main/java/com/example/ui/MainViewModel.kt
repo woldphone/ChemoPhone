@@ -25,9 +25,77 @@ class MainViewModel : ViewModel() {
     private val _passcodeHex = MutableStateFlow(Constants.DEFAULT_PASSCODE_HEX)
     val passcodeHex: StateFlow<String> = _passcodeHex.asStateFlow()
 
+    // UI Configuration StateFlows
+    val acousticMode = MutableStateFlow(Constants.DEFAULT_ACOUSTIC_MODE)
+    val acousticSensitivity = MutableStateFlow(Constants.DEFAULT_ACOUSTIC_SENSITIVITY)
+    val acousticSampleRate = MutableStateFlow(Constants.DEFAULT_ACOUSTIC_SAMPLE_RATE)
+    val acousticRhythmicCount = MutableStateFlow(Constants.DEFAULT_ACOUSTIC_RHYTHMIC_COUNT)
+    val strobeFrequency = MutableStateFlow(Constants.DEFAULT_STROBE_FREQUENCY)
+    val strobeEnabled = MutableStateFlow(Constants.DEFAULT_STROBE_ENABLED)
+    val vibrationPattern = MutableStateFlow(Constants.DEFAULT_VIBRATION_PATTERN)
+    val alarmSoundDuration = MutableStateFlow(Constants.DEFAULT_ALARM_SOUND_DURATION)
+    val biometricLockEnabled = MutableStateFlow(Constants.DEFAULT_BIOMETRIC_LOCK_ENABLED)
+    val gattTxPower = MutableStateFlow(Constants.DEFAULT_GATT_TX_POWER)
+    val gattAdvMode = MutableStateFlow(Constants.DEFAULT_GATT_ADV_MODE)
+    val gattShowName = MutableStateFlow(Constants.DEFAULT_GATT_SHOW_NAME)
+
     fun loadPreferences(context: Context) {
         val prefs = context.getSharedPreferences(Constants.PREFS_NAME, Context.MODE_PRIVATE)
         _passcodeHex.value = prefs.getString(Constants.KEY_PASSCODE_HEX, Constants.DEFAULT_PASSCODE_HEX) ?: Constants.DEFAULT_PASSCODE_HEX
+
+        acousticMode.value = prefs.getString(Constants.KEY_ACOUSTIC_MODE, Constants.DEFAULT_ACOUSTIC_MODE) ?: Constants.DEFAULT_ACOUSTIC_MODE
+        acousticSensitivity.value = prefs.getInt(Constants.KEY_ACOUSTIC_SENSITIVITY, Constants.DEFAULT_ACOUSTIC_SENSITIVITY)
+        acousticSampleRate.value = prefs.getInt(Constants.KEY_ACOUSTIC_SAMPLE_RATE, Constants.DEFAULT_ACOUSTIC_SAMPLE_RATE)
+        acousticRhythmicCount.value = prefs.getInt(Constants.KEY_ACOUSTIC_RHYTHMIC_COUNT, Constants.DEFAULT_ACOUSTIC_RHYTHMIC_COUNT)
+        strobeFrequency.value = prefs.getInt(Constants.KEY_STROBE_FREQUENCY, Constants.DEFAULT_STROBE_FREQUENCY)
+        strobeEnabled.value = prefs.getBoolean(Constants.KEY_STROBE_ENABLED, Constants.DEFAULT_STROBE_ENABLED)
+        vibrationPattern.value = prefs.getString(Constants.KEY_VIBRATION_PATTERN, Constants.DEFAULT_VIBRATION_PATTERN) ?: Constants.DEFAULT_VIBRATION_PATTERN
+        alarmSoundDuration.value = prefs.getInt(Constants.KEY_ALARM_SOUND_DURATION, Constants.DEFAULT_ALARM_SOUND_DURATION)
+        biometricLockEnabled.value = prefs.getBoolean(Constants.KEY_BIOMETRIC_LOCK_ENABLED, Constants.DEFAULT_BIOMETRIC_LOCK_ENABLED)
+        gattTxPower.value = prefs.getString(Constants.KEY_GATT_TX_POWER, Constants.DEFAULT_GATT_TX_POWER) ?: Constants.DEFAULT_GATT_TX_POWER
+        gattAdvMode.value = prefs.getString(Constants.KEY_GATT_ADV_MODE, Constants.DEFAULT_GATT_ADV_MODE) ?: Constants.DEFAULT_GATT_ADV_MODE
+        gattShowName.value = prefs.getBoolean(Constants.KEY_GATT_SHOW_NAME, Constants.DEFAULT_GATT_SHOW_NAME)
+    }
+
+    fun updatePreference(context: Context, key: String, value: Any) {
+        val prefs = context.getSharedPreferences(Constants.PREFS_NAME, Context.MODE_PRIVATE)
+        val edit = prefs.edit()
+        when (value) {
+            is String -> {
+                edit.putString(key, value)
+                when (key) {
+                    Constants.KEY_ACOUSTIC_MODE -> acousticMode.value = value
+                    Constants.KEY_VIBRATION_PATTERN -> vibrationPattern.value = value
+                    Constants.KEY_GATT_TX_POWER -> gattTxPower.value = value
+                    Constants.KEY_GATT_ADV_MODE -> gattAdvMode.value = value
+                }
+            }
+            is Int -> {
+                edit.putInt(key, value)
+                when (key) {
+                    Constants.KEY_ACOUSTIC_SENSITIVITY -> acousticSensitivity.value = value
+                    Constants.KEY_ACOUSTIC_SAMPLE_RATE -> acousticSampleRate.value = value
+                    Constants.KEY_ACOUSTIC_RHYTHMIC_COUNT -> acousticRhythmicCount.value = value
+                    Constants.KEY_STROBE_FREQUENCY -> strobeFrequency.value = value
+                    Constants.KEY_ALARM_SOUND_DURATION -> alarmSoundDuration.value = value
+                }
+            }
+            is Boolean -> {
+                edit.putBoolean(key, value)
+                when (key) {
+                    Constants.KEY_STROBE_ENABLED -> strobeEnabled.value = value
+                    Constants.KEY_BIOMETRIC_LOCK_ENABLED -> biometricLockEnabled.value = value
+                    Constants.KEY_GATT_SHOW_NAME -> gattShowName.value = value
+                }
+            }
+        }
+        edit.apply()
+
+        // Notify Service to dynamically reload preferences
+        val intent = Intent(context, LocalBleService::class.java).apply {
+            action = Constants.ACTION_UPDATE_DYNAMIC_PREFS
+        }
+        context.startService(intent)
     }
 
     fun toggleService(context: Context, enable: Boolean) {

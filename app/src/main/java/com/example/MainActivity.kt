@@ -13,6 +13,11 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
+import androidx.fragment.app.FragmentActivity
+import com.example.service.BiometricAuthHelper
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -96,7 +101,7 @@ import com.example.ui.theme.BeaconTextLight
 import com.example.ui.theme.BeaconTextMuted
 import com.example.ui.theme.MyApplicationTheme
 
-class MainActivity : ComponentActivity() {
+class MainActivity : FragmentActivity() {
 
     private val viewModel: MainViewModel by viewModels()
 
@@ -104,6 +109,31 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         viewModel.loadPreferences(this)
+
+        // Handle Back Press with Biometric challenge if Biometric shield is active
+        val callback = object : androidx.activity.OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                val prefs = getSharedPreferences(Constants.PREFS_NAME, Context.MODE_PRIVATE)
+                val lockEnabled = prefs.getBoolean(Constants.KEY_BIOMETRIC_LOCK_ENABLED, Constants.DEFAULT_BIOMETRIC_LOCK_ENABLED)
+                if (lockEnabled) {
+                    BiometricAuthHelper.authenticate(
+                        this@MainActivity,
+                        "Exit Lock Screen",
+                        "Authenticate with biometrics or PIN to exit Offline Phone Finder"
+                    , onSuccess = {
+                        // User authenticated, proceed with back action
+                        isEnabled = false
+                        onBackPressedDispatcher.onBackPressed()
+                    }, onFailure = {
+                        Toast.makeText(this@MainActivity, "Exiting app is locked. Identity required.", Toast.LENGTH_SHORT).show()
+                    })
+                } else {
+                    isEnabled = false
+                    onBackPressedDispatcher.onBackPressed()
+                }
+            }
+        }
+        onBackPressedDispatcher.addCallback(this, callback)
 
         setContent {
             MyApplicationTheme {
@@ -116,6 +146,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun FinderAppScreen(viewModel: MainViewModel) {
     val context = LocalContext.current
+    val activity = context as FragmentActivity
 
     val isServiceRunning by viewModel.isServiceRunning.collectAsState()
     val isAdvertising by viewModel.isAdvertising.collectAsState()
@@ -126,6 +157,20 @@ fun FinderAppScreen(viewModel: MainViewModel) {
     val rejectedAttemptsCount by viewModel.rejectedAttemptsCount.collectAsState()
     val logs by viewModel.logs.collectAsState()
     val savedPasscodeHex by viewModel.passcodeHex.collectAsState()
+
+    // Config preferences
+    val mode by viewModel.acousticMode.collectAsState()
+    val sensitivity by viewModel.acousticSensitivity.collectAsState()
+    val sampleRate by viewModel.acousticSampleRate.collectAsState()
+    val rhythmicCount by viewModel.acousticRhythmicCount.collectAsState()
+    val strobeFreq by viewModel.strobeFrequency.collectAsState()
+    val strobeOn by viewModel.strobeEnabled.collectAsState()
+    val vibePattern by viewModel.vibrationPattern.collectAsState()
+    val soundDuration by viewModel.alarmSoundDuration.collectAsState()
+    val biometricLock by viewModel.biometricLockEnabled.collectAsState()
+    val txPower by viewModel.gattTxPower.collectAsState()
+    val advMode by viewModel.gattAdvMode.collectAsState()
+    val showName by viewModel.gattShowName.collectAsState()
 
     var passcodeInput by remember(savedPasscodeHex) { mutableStateOf(savedPasscodeHex) }
     var hasPermissions by remember { mutableStateOf(checkRequiredPermissions(context)) }
@@ -210,7 +255,21 @@ fun FinderAppScreen(viewModel: MainViewModel) {
                             if (!hasPermissions) {
                                 permissionLauncher.launch(getRequiredPermissionsList())
                             } else {
-                                viewModel.toggleService(context, enable)
+                                if (biometricLock && !enable) {
+                                    BiometricAuthHelper.authenticate(
+                                        activity,
+                                        "Stop Finder Service",
+                                        "Confirm biometric identity to disable phone finder",
+                                        onSuccess = {
+                                            viewModel.toggleService(context, false)
+                                        },
+                                        onFailure = { err ->
+                                            Toast.makeText(context, "Authentication failed: $err", Toast.LENGTH_SHORT).show()
+                                        }
+                                    )
+                                } else {
+                                    viewModel.toggleService(context, enable)
+                                }
                             }
                         }
                     )
@@ -229,10 +288,24 @@ fun FinderAppScreen(viewModel: MainViewModel) {
                             if (!hasPermissions) {
                                 permissionLauncher.launch(getRequiredPermissionsList())
                             } else {
-                                if (!isServiceRunning && enable) {
-                                    viewModel.toggleService(context, true)
+                                if (biometricLock && !enable) {
+                                    BiometricAuthHelper.authenticate(
+                                        activity,
+                                        "Disable Acoustic Finder",
+                                        "Confirm biometric identity to disable microphone listening",
+                                        onSuccess = {
+                                            viewModel.toggleAcoustic(context, false)
+                                        },
+                                        onFailure = { err ->
+                                            Toast.makeText(context, "Authentication failed: $err", Toast.LENGTH_SHORT).show()
+                                        }
+                                    )
+                                } else {
+                                    if (!isServiceRunning && enable) {
+                                        viewModel.toggleService(context, true)
+                                    }
+                                    viewModel.toggleAcoustic(context, enable)
                                 }
-                                viewModel.toggleAcoustic(context, enable)
                             }
                         }
                     )
@@ -247,6 +320,25 @@ fun FinderAppScreen(viewModel: MainViewModel) {
                             viewModel.updatePasscode(context, passcodeInput)
                             Toast.makeText(context, "Passcode updated to 0x${passcodeInput.uppercase()}", Toast.LENGTH_SHORT).show()
                         }
+                    )
+                }
+
+                // Interactive Settings Customizer Screen
+                item {
+                    SettingsCustomizerCard(
+                        viewModel = viewModel,
+                        mode = mode,
+                        sensitivity = sensitivity,
+                        sampleRate = sampleRate,
+                        rhythmicCount = rhythmicCount,
+                        strobeFreq = strobeFreq,
+                        strobeOn = strobeOn,
+                        vibePattern = vibePattern,
+                        soundDuration = soundDuration,
+                        biometricLock = biometricLock,
+                        txPower = txPower,
+                        advMode = advMode,
+                        showName = showName
                     )
                 }
 
@@ -992,6 +1084,418 @@ fun LogsTerminalCard(logs: List<LogEntry>, onClearLogs: () -> Unit) {
                                 )
                             }
                         }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun SettingsCustomizerCard(
+    viewModel: MainViewModel,
+    mode: String,
+    sensitivity: Int,
+    sampleRate: Int,
+    rhythmicCount: Int,
+    strobeFreq: Int,
+    strobeOn: Boolean,
+    vibePattern: String,
+    soundDuration: Int,
+    biometricLock: Boolean,
+    txPower: String,
+    advMode: String,
+    showName: Boolean
+) {
+    val context = LocalContext.current
+    var isExpanded by remember { mutableStateOf(false) }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = BeaconNavyCard)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { isExpanded = !isExpanded },
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.Info,
+                        contentDescription = null,
+                        tint = BeaconCyan,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Customize App Settings",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = BeaconTextLight
+                    )
+                }
+                Text(
+                    text = if (isExpanded) "Hide" else "Show Settings",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = BeaconCyan
+                )
+            }
+
+            AnimatedVisibility(visible = isExpanded) {
+                Column(modifier = Modifier.padding(top = 16.dp)) {
+                    // --- ACOUSTIC SETTINGS ---
+                    Text(
+                        text = "ACOUSTIC FINDER SETTINGS",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = BeaconCyanGlow,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Mode Toggle (Rhythmic Code vs Peak Threshold)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("Acoustic Detection Mode", style = MaterialTheme.typography.bodySmall, color = BeaconTextLight)
+                        Row {
+                            Button(
+                                onClick = { viewModel.updatePreference(context, Constants.KEY_ACOUSTIC_MODE, "rhythmic") },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (mode == "rhythmic") BeaconCyan else BeaconNavyDark
+                                ),
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.height(32.dp).padding(horizontal = 2.dp)
+                            ) {
+                                Text("Rhythmic", fontSize = 10.sp, color = if (mode == "rhythmic") BeaconNavyDark else BeaconTextMuted)
+                            }
+                            Button(
+                                onClick = { viewModel.updatePreference(context, Constants.KEY_ACOUSTIC_MODE, "threshold") },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (mode == "threshold") BeaconCyan else BeaconNavyDark
+                                ),
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.height(32.dp).padding(horizontal = 2.dp)
+                            ) {
+                                Text("Peak", fontSize = 10.sp, color = if (mode == "threshold") BeaconNavyDark else BeaconTextMuted)
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Sensitivity Slider
+                    Column {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("Microphone Sensitivity ($sensitivity%)", style = MaterialTheme.typography.bodySmall, color = BeaconTextLight)
+                            Text("100% = Whispers", style = MaterialTheme.typography.bodySmall, color = BeaconTextMuted)
+                        }
+                        Slider(
+                            value = sensitivity.toFloat(),
+                            onValueChange = { viewModel.updatePreference(context, Constants.KEY_ACOUSTIC_SENSITIVITY, it.toInt()) },
+                            valueRange = 1f..100f,
+                            colors = SliderDefaults.colors(
+                                thumbColor = BeaconCyan,
+                                activeTrackColor = BeaconCyan,
+                                inactiveTrackColor = BeaconNavyDark
+                            )
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Clap Count for Rhythmic Mode
+                    if (mode == "rhythmic") {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("Rhythmic Spike Count", style = MaterialTheme.typography.bodySmall, color = BeaconTextLight)
+                            Row {
+                                Button(
+                                    onClick = { viewModel.updatePreference(context, Constants.KEY_ACOUSTIC_RHYTHMIC_COUNT, 2) },
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = if (rhythmicCount == 2) BeaconCyan else BeaconNavyDark
+                                    ),
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier.height(32.dp).padding(horizontal = 2.dp)
+                                ) {
+                                    Text("Double-Clap", fontSize = 10.sp, color = if (rhythmicCount == 2) BeaconNavyDark else BeaconTextMuted)
+                                }
+                                Button(
+                                    onClick = { viewModel.updatePreference(context, Constants.KEY_ACOUSTIC_RHYTHMIC_COUNT, 3) },
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = if (rhythmicCount == 3) BeaconCyan else BeaconNavyDark
+                                    ),
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier.height(32.dp).padding(horizontal = 2.dp)
+                                ) {
+                                    Text("Triple-Clap", fontSize = 10.sp, color = if (rhythmicCount == 3) BeaconNavyDark else BeaconTextMuted)
+                                }
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+
+                    // Sample rate (Power optimization)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("Microphone Power Mode", style = MaterialTheme.typography.bodySmall, color = BeaconTextLight)
+                        Row {
+                            Button(
+                                onClick = { viewModel.updatePreference(context, Constants.KEY_ACOUSTIC_SAMPLE_RATE, 16000) },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (sampleRate == 16000) BeaconCyan else BeaconNavyDark
+                                ),
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.height(32.dp).padding(horizontal = 2.dp)
+                            ) {
+                                Text("Low Power", fontSize = 10.sp, color = if (sampleRate == 16000) BeaconNavyDark else BeaconTextMuted)
+                            }
+                            Button(
+                                onClick = { viewModel.updatePreference(context, Constants.KEY_ACOUSTIC_SAMPLE_RATE, 44100) },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (sampleRate == 44100) BeaconCyan else BeaconNavyDark
+                                ),
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.height(32.dp).padding(horizontal = 2.dp)
+                            ) {
+                                Text("High Precision", fontSize = 10.sp, color = if (sampleRate == 44100) BeaconNavyDark else BeaconTextMuted)
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    // --- GATT / ADV SETTINGS ---
+                    Text(
+                        text = "GATT & BEACON BROADCAST SETTINGS",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = BeaconCyanGlow,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Show device name toggle
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("Broadcast Local Device Name", style = MaterialTheme.typography.bodySmall, color = BeaconTextLight)
+                        Switch(
+                            checked = showName,
+                            onCheckedChange = { viewModel.updatePreference(context, Constants.KEY_GATT_SHOW_NAME, it) },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = BeaconTextLight,
+                                checkedTrackColor = BeaconCyan,
+                                uncheckedThumbColor = BeaconTextMuted,
+                                uncheckedTrackColor = BeaconNavyDark
+                            )
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Tx Power level
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("GATT Signal Tx Power", style = MaterialTheme.typography.bodySmall, color = BeaconTextLight)
+                        Row {
+                            listOf("low", "medium", "high").forEach { pwr ->
+                                Button(
+                                    onClick = { viewModel.updatePreference(context, Constants.KEY_GATT_TX_POWER, pwr) },
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = if (txPower == pwr) BeaconCyan else BeaconNavyDark
+                                    ),
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier.height(32.dp).padding(horizontal = 2.dp)
+                                ) {
+                                    Text(pwr.uppercase(), fontSize = 9.sp, color = if (txPower == pwr) BeaconNavyDark else BeaconTextMuted)
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Advertise Mode
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("BLE Beacon Mode", style = MaterialTheme.typography.bodySmall, color = BeaconTextLight)
+                        Row {
+                            listOf("low_power", "balanced", "low_latency").forEach { modeKey ->
+                                Button(
+                                    onClick = { viewModel.updatePreference(context, Constants.KEY_GATT_ADV_MODE, modeKey) },
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = if (advMode == modeKey) BeaconCyan else BeaconNavyDark
+                                    ),
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier.height(32.dp).padding(horizontal = 2.dp)
+                                ) {
+                                    Text(modeKey.replace("_", " ").uppercase(), fontSize = 8.sp, color = if (advMode == modeKey) BeaconNavyDark else BeaconTextMuted)
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    // --- ALARM / FLASH SETTINGS ---
+                    Text(
+                        text = "ALARM SOUND & FLASH CUSTOMIZATION",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = BeaconCyanGlow,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Torch Strobe Toggle
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("Flash Camera LED Strobe", style = MaterialTheme.typography.bodySmall, color = BeaconTextLight)
+                        Switch(
+                            checked = strobeOn,
+                            onCheckedChange = { viewModel.updatePreference(context, Constants.KEY_STROBE_ENABLED, it) },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = BeaconTextLight,
+                                checkedTrackColor = BeaconCyan,
+                                uncheckedThumbColor = BeaconTextMuted,
+                                uncheckedTrackColor = BeaconNavyDark
+                            )
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Strobe speed
+                    if (strobeOn) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("Strobe Flashing Speed", style = MaterialTheme.typography.bodySmall, color = BeaconTextLight)
+                            Row {
+                                mapOf(100 to "Fast", 200 to "Normal", 500 to "Slow").forEach { (delayTime, label) ->
+                                    Button(
+                                        onClick = { viewModel.updatePreference(context, Constants.KEY_STROBE_FREQUENCY, delayTime) },
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = if (strobeFreq == delayTime) BeaconCyan else BeaconNavyDark
+                                        ),
+                                        shape = RoundedCornerShape(8.dp),
+                                        modifier = Modifier.height(32.dp).padding(horizontal = 2.dp)
+                                    ) {
+                                        Text(label, fontSize = 9.sp, color = if (strobeFreq == delayTime) BeaconNavyDark else BeaconTextMuted)
+                                    }
+                                }
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+
+                    // Vibration pattern selection
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("Vibration Pattern", style = MaterialTheme.typography.bodySmall, color = BeaconTextLight)
+                        Row {
+                            listOf("none", "pulse", "continuous", "sos").forEach { vMode ->
+                                Button(
+                                    onClick = { viewModel.updatePreference(context, Constants.KEY_VIBRATION_PATTERN, vMode) },
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = if (vibePattern == vMode) BeaconCyan else BeaconNavyDark
+                                    ),
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier.height(32.dp).padding(horizontal = 2.dp)
+                                ) {
+                                    Text(vMode.uppercase(), fontSize = 8.sp, color = if (vibePattern == vMode) BeaconNavyDark else BeaconTextMuted)
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Alarm Duration Slider
+                    Column {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("Alarm Auto-Timeout ($soundDuration Secs)", style = MaterialTheme.typography.bodySmall, color = BeaconTextLight)
+                            Text("Saves battery if lost", style = MaterialTheme.typography.bodySmall, color = BeaconTextMuted)
+                        }
+                        Slider(
+                            value = soundDuration.toFloat(),
+                            onValueChange = { viewModel.updatePreference(context, Constants.KEY_ALARM_SOUND_DURATION, it.toInt()) },
+                            valueRange = 5f..120f,
+                            colors = SliderDefaults.colors(
+                                thumbColor = BeaconCyan,
+                                activeTrackColor = BeaconCyan,
+                                inactiveTrackColor = BeaconNavyDark
+                            )
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    // --- PRIVACY & BIOMETRIC LOCK ---
+                    Text(
+                        text = "SECURITY & CLOSING PRIVACY LOCK",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = BeaconCyanGlow,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Biometric Stop Shield", style = MaterialTheme.typography.bodySmall, color = BeaconTextLight)
+                            Text("Requires fingerprint/face/passkey to close finders or stop background tasks", style = MaterialTheme.typography.bodySmall, color = BeaconTextMuted, fontSize = 10.sp, lineHeight = 13.sp)
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Switch(
+                            checked = biometricLock,
+                            onCheckedChange = { viewModel.updatePreference(context, Constants.KEY_BIOMETRIC_LOCK_ENABLED, it) },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = BeaconTextLight,
+                                checkedTrackColor = BeaconCyan,
+                                uncheckedThumbColor = BeaconTextMuted,
+                                uncheckedTrackColor = BeaconNavyDark
+                            )
+                        )
                     }
                 }
             }
