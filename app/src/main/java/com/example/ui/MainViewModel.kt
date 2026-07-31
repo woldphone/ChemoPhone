@@ -143,6 +143,17 @@ class MainViewModel : ViewModel() {
         context.startService(intent)
     }
 
+    // Auto Update States
+    val updateStatus = com.example.service.AutoUpdateManager.updateStatus
+
+    fun checkAppUpdates(scope: kotlinx.coroutines.CoroutineScope) {
+        com.example.service.AutoUpdateManager.checkForUpdates(scope)
+    }
+
+    fun downloadAndInstallUpdate(context: Context, scope: kotlinx.coroutines.CoroutineScope, downloadUrl: String) {
+        com.example.service.AutoUpdateManager.downloadAndInstallApk(context, scope, downloadUrl)
+    }
+
     fun clearLogs() {
         ServiceState.clearLogs()
     }

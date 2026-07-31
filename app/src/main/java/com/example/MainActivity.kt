@@ -205,7 +205,10 @@ fun FinderAppScreen(viewModel: MainViewModel) {
             Spacer(modifier = Modifier.height(12.dp))
             HeaderBar()
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(8.dp))
+            AutoUpdateBanner(viewModel = viewModel)
+
+            Spacer(modifier = Modifier.height(12.dp))
 
             if (!hasPermissions) {
                 PermissionWarningCard(
@@ -1499,6 +1502,146 @@ fun SettingsCustomizerCard(
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+fun AutoUpdateBanner(viewModel: MainViewModel) {
+    val context = LocalContext.current
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    val updateState by viewModel.updateStatus.collectAsState()
+
+    // Automatically check for updates on startup
+    LaunchedEffect(Unit) {
+        viewModel.checkAppUpdates(scope)
+    }
+
+    when (val state = updateState) {
+        is com.example.service.AutoUpdateManager.UpdateState.Checking -> {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = BeaconNavyCard)
+            ) {
+                Row(
+                    modifier = Modifier.padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    androidx.compose.material3.CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp),
+                        strokeWidth = 2.dp,
+                        color = BeaconCyan
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Text("Checking for GitHub debug updates...", style = MaterialTheme.typography.bodySmall, color = BeaconTextMuted)
+                }
+            }
+        }
+        is com.example.service.AutoUpdateManager.UpdateState.UpdateAvailable -> {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = BeaconCyan.copy(alpha = 0.15f)),
+                border = androidx.compose.foundation.BorderStroke(1.dp, BeaconCyan)
+            ) {
+                Row(
+                    modifier = Modifier.padding(12.dp).fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("New GitHub Debug Build Available!", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = BeaconCyanGlow)
+                        Text("Release tag: ${state.latestVersion}", style = MaterialTheme.typography.bodySmall, color = BeaconTextLight)
+                    }
+                    Button(
+                        onClick = { viewModel.downloadAndInstallUpdate(context, scope, state.downloadUrl) },
+                        colors = ButtonDefaults.buttonColors(containerColor = BeaconCyan),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.height(32.dp)
+                    ) {
+                        Text("UPDATE", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = BeaconNavyDark)
+                    }
+                }
+            }
+        }
+        is com.example.service.AutoUpdateManager.UpdateState.Downloading -> {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = BeaconNavyCard)
+            ) {
+                Column(modifier = Modifier.padding(12.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("Downloading latest debug APK...", style = MaterialTheme.typography.bodySmall, color = BeaconTextLight)
+                        Text("${state.progress}%", style = MaterialTheme.typography.bodySmall, color = BeaconCyanGlow, fontWeight = FontWeight.Bold)
+                    }
+                    Spacer(modifier = Modifier.height(6.dp))
+                    androidx.compose.material3.LinearProgressIndicator(
+                        progress = { state.progress.toFloat() / 100f },
+                        modifier = Modifier.fillMaxWidth(),
+                        color = BeaconCyan,
+                        trackColor = BeaconNavyDark
+                    )
+                }
+            }
+        }
+        is com.example.service.AutoUpdateManager.UpdateState.ReadyToInstall -> {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = BeaconEmerald.copy(alpha = 0.15f)),
+                border = androidx.compose.foundation.BorderStroke(1.dp, BeaconEmerald)
+            ) {
+                Row(
+                    modifier = Modifier.padding(12.dp).fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Download Complete!", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = BeaconEmerald)
+                        Text("Ready to launch package installer", style = MaterialTheme.typography.bodySmall, color = BeaconTextLight)
+                    }
+                    Button(
+                        onClick = { com.example.service.AutoUpdateManager.launchInstaller(context, state.apkFile) },
+                        colors = ButtonDefaults.buttonColors(containerColor = BeaconEmerald),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.height(32.dp)
+                    ) {
+                        Text("INSTALL", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = BeaconNavyDark)
+                    }
+                }
+            }
+        }
+        is com.example.service.AutoUpdateManager.UpdateState.Error -> {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = BeaconNavyCard)
+            ) {
+                Row(
+                    modifier = Modifier.padding(12.dp).fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("Auto check: ${state.message}", style = MaterialTheme.typography.bodySmall, color = BeaconTextMuted, modifier = Modifier.weight(1f))
+                    Button(
+                        onClick = { viewModel.checkAppUpdates(scope) },
+                        colors = ButtonDefaults.buttonColors(containerColor = BeaconNavyDark),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, BeaconTextMuted),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.height(30.dp)
+                    ) {
+                        Text("RETRY", fontSize = 10.sp, color = BeaconTextLight)
+                    }
+                }
+            }
+        }
+        else -> {
+            // Idle or NoUpdate - do not show anything to keep UI completely clean!
         }
     }
 }
