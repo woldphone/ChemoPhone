@@ -146,7 +146,16 @@ class MainActivity : FragmentActivity() {
 @Composable
 fun FinderAppScreen(viewModel: MainViewModel) {
     val context = LocalContext.current
-    val activity = context as FragmentActivity
+
+    // Recursive context unwrapper helper to safely resolve parent FragmentActivity
+    val activity = remember(context) {
+        var ctx = context
+        while (ctx is android.content.ContextWrapper) {
+            if (ctx is FragmentActivity) break
+            ctx = ctx.baseContext
+        }
+        ctx as? FragmentActivity
+    }
 
     val isServiceRunning by viewModel.isServiceRunning.collectAsState()
     val isAdvertising by viewModel.isAdvertising.collectAsState()
@@ -258,7 +267,7 @@ fun FinderAppScreen(viewModel: MainViewModel) {
                             if (!hasPermissions) {
                                 permissionLauncher.launch(getRequiredPermissionsList())
                             } else {
-                                if (biometricLock && !enable) {
+                                if (biometricLock && !enable && activity != null) {
                                     BiometricAuthHelper.authenticate(
                                         activity,
                                         "Stop Finder Service",
@@ -291,7 +300,7 @@ fun FinderAppScreen(viewModel: MainViewModel) {
                             if (!hasPermissions) {
                                 permissionLauncher.launch(getRequiredPermissionsList())
                             } else {
-                                if (biometricLock && !enable) {
+                                if (biometricLock && !enable && activity != null) {
                                     BiometricAuthHelper.authenticate(
                                         activity,
                                         "Disable Acoustic Finder",

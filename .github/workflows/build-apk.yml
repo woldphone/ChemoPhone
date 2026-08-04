@@ -1,4 +1,4 @@
-name: Build Android Debug APK
+name: Build Android Release APK
 
 on:
   push:
@@ -9,7 +9,7 @@ on:
 
 jobs:
   build:
-    name: Build Debug APK
+    name: Build Release APK
     runs-on: ubuntu-latest
 
     steps:
@@ -26,14 +26,14 @@ jobs:
       - name: Make Gradlew Executable
         run: chmod +x gradlew
 
-      - name: Build Debug APK with Gradle
-        run: ./gradlew :app:assembleDebug --no-daemon
+      - name: Build Release APK with Gradle
+        run: ./gradlew :app:assembleRelease --no-daemon
 
-      - name: Upload Debug APK Artifact
+      - name: Upload Release APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: offline-phone-finder-debug-apk
-          path: app/build/outputs/apk/debug/*.apk
+          name: offline-phone-finder-release-apk
+          path: app/build/outputs/apk/release/*.apk
           retention-days: 14
 
       - name: Create or Update Rolling GitHub Release
@@ -41,13 +41,13 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest-debug
-          name: "Latest Continuous Debug Build"
+          name: "Latest Continuous Release Build"
           body: |
-            This is an automated continuous release of the latest debug build.
+            This is an automated continuous release of the latest production release build.
             Triggered by commit: ${{ github.sha }}
             Commit Message: ${{ github.event.head_commit.message }}
           draft: false
-          prerelease: true
-          files: app/build/outputs/apk/debug/app-debug.apk
+          prerelease: false
+          files: app/build/outputs/apk/release/app-release.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

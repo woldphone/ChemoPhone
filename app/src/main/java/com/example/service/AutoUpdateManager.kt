@@ -56,7 +56,7 @@ object AutoUpdateManager {
                     val jsonStr = response.body?.string() ?: ""
                     val json = JSONObject(jsonStr)
 
-                    // Parse Assets to find app-debug.apk download url
+                    // Parse Assets to find app-release.apk download url
                     val assets = json.getJSONArray("assets")
                     var downloadUrl = ""
                     for (i in 0 until assets.length()) {
@@ -145,6 +145,19 @@ object AutoUpdateManager {
 
     fun launchInstaller(context: Context, file: File) {
         try {
+            // Verify and prompt for UNKNOWN APP SOURCES installer permissions on SDK 26+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                if (!context.packageManager.canRequestPackageInstalls()) {
+                    _updateStatus.value = UpdateState.Error("Please enable 'Install unknown apps' permission to allow automatic updates.")
+                    val settingsIntent = Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES).apply {
+                        data = Uri.parse("package:${context.packageName}")
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                    }
+                    context.startActivity(settingsIntent)
+                    return
+                }
+            }
+
             val authority = "${context.packageName}.fileprovider"
             val apkUri = FileProvider.getUriForFile(context, authority, file)
 

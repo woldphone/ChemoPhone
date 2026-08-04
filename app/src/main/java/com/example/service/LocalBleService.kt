@@ -53,6 +53,9 @@ class LocalBleService : Service() {
     private var activePasscodeHex: String = Constants.DEFAULT_PASSCODE_HEX
     private var isAcousticEnabled: Boolean = false
 
+    // Remote client session security state tracker to verify client successfully completed passcode verification
+    private val authenticatedClients = mutableSetOf<String>()
+
     override fun onCreate() {
         super.onCreate()
         Log.d(TAG, "LocalBleService onCreate initialized")
@@ -308,6 +311,7 @@ class LocalBleService : Service() {
                 ServiceState.addLog("Remote device connected via BLE: $address")
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 ServiceState.addLog("Remote device disconnected: $address")
+                authenticatedClients.remove(address)
             }
         }
 
@@ -324,13 +328,19 @@ class LocalBleService : Service() {
             super.onCharacteristicReadRequest(device, requestId, offset, characteristic)
             Log.d(TAG, "GATT Read Request received on characteristic ${characteristic?.uuid}")
 
+            val address = device?.address ?: ""
             if (characteristic?.uuid == Constants.STATUS_CHARACTERISTIC_UUID) {
-                // Return simple telemetry: battery (simulated 85%), alarm ringing status, and verified counts.
-                val statusString = "BAT:85|ALM:${if (alarmController.isRinging()) 1 else 0}|TRG:${ServiceState.verifiedTriggersCount.value}"
-                val dataBytes = statusString.toByteArray(Charsets.UTF_8)
-                val slicedBytes = if (offset < dataBytes.size) dataBytes.copyOfRange(offset, dataBytes.size) else byteArrayOf()
-                gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, slicedBytes)
-                ServiceState.addLog("Telemetry Status requested and sent over BLE.")
+                // GATT Security check: ensure client successfully solved handshake before returning telemetry
+                if (authenticatedClients.contains(address)) {
+                    val statusString = "BAT:85|ALM:${if (alarmController.isRinging()) 1 else 0}|TRG:${ServiceState.verifiedTriggersCount.value}"
+                    val dataBytes = statusString.toByteArray(Charsets.UTF_8)
+                    val slicedBytes = if (offset < dataBytes.size) dataBytes.copyOfRange(offset, dataBytes.size) else byteArrayOf()
+                    gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, slicedBytes)
+                    ServiceState.addLog("Telemetry Status requested and sent over BLE.")
+                } else {
+                    gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_READ_NOT_PERMITTED, offset, byteArrayOf())
+                    ServiceState.addLog("Security status read rejected for unauthenticated client device: $address", isError = true)
+                }
             } else {
                 gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_FAILURE, offset, byteArrayOf())
             }
@@ -357,6 +367,7 @@ class LocalBleService : Service() {
             var isValid = false
             val expectedBytes = hexStringToByteArray(activePasscodeHex)
 
+            val address = device?.address ?: ""
             if (characteristic?.uuid == Constants.CHARACTERISTIC_UUID && value != null) {
                 if (Arrays.equals(value, expectedBytes)) {
                     isValid = true
@@ -368,6 +379,7 @@ class LocalBleService : Service() {
                 }
 
                 if (isValid) {
+                    authenticatedClients.add(address)
                     ServiceState.incrementVerifiedTriggers()
                     ServiceState.addLog(
                         "VALID SECURITY HANDSHAKE (0x${activePasscodeHex})! Triggering high-volume alarm!",
@@ -394,6 +406,7 @@ class LocalBleService : Service() {
                     val receivedPasscode = value.copyOfRange(0, 4)
                     if (Arrays.equals(receivedPasscode, expectedBytes)) {
                         isValid = true
+                        authenticatedClients.add(address)
                         val commandCode = value[4]
 
                         if (responseNeeded) {
