@@ -1,0 +1,2 @@
+Merge resolution commit - syncing with latest main branch
+This resolves the merge conflict by incorporating the latest changes from main.

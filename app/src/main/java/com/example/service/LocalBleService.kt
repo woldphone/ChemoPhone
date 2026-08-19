@@ -53,6 +53,9 @@ class LocalBleService : Service() {
     private var activePasscodeHex: String = Constants.DEFAULT_PASSCODE_HEX
     private var isAcousticEnabled: Boolean = false
 
+    // Remote client session security state tracker to verify client successfully completed passcode verification
+    private val authenticatedClients = mutableSetOf<String>()
+
     override fun onCreate() {
         super.onCreate()
         Log.d(TAG, "LocalBleService onCreate initialized")
@@ -109,6 +112,14 @@ class LocalBleService : Service() {
                     ServiceState.addLog("Updated authentication passcode to 0x$activePasscodeHex")
                 }
             }
+            Constants.ACTION_UPDATE_DYNAMIC_PREFS -> {
+                // Settings have changed, restart / apply settings dynamically
+                if (ServiceState.isServiceRunning.value) {
+                    stopBleAdvertisingAndGattServer()
+                    startBleAdvertisingAndGattServer()
+                }
+                syncAcousticDetectorState()
+            }
             else -> {
                 startBleAdvertisingAndGattServer()
                 syncAcousticDetectorState()
@@ -153,22 +164,44 @@ class LocalBleService : Service() {
             return
         }
 
+        val prefs = getSharedPreferences(Constants.PREFS_NAME, Context.MODE_PRIVATE)
+        val advModeStr = prefs.getString(Constants.KEY_GATT_ADV_MODE, Constants.DEFAULT_GATT_ADV_MODE) ?: Constants.DEFAULT_GATT_ADV_MODE
+        val txPowerStr = prefs.getString(Constants.KEY_GATT_TX_POWER, Constants.DEFAULT_GATT_TX_POWER) ?: Constants.DEFAULT_GATT_TX_POWER
+        val showName = prefs.getBoolean(Constants.KEY_GATT_SHOW_NAME, Constants.DEFAULT_GATT_SHOW_NAME)
+
+        val advMode = when (advModeStr) {
+            "low_power" -> AdvertiseSettings.ADVERTISE_MODE_LOW_POWER
+            "low_latency" -> AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY
+            else -> AdvertiseSettings.ADVERTISE_MODE_BALANCED
+        }
+
+        val txPower = when (txPowerStr) {
+            "ultra_low" -> AdvertiseSettings.ADVERTISE_TX_POWER_ULTRA_LOW
+            "low" -> AdvertiseSettings.ADVERTISE_TX_POWER_LOW
+            "high" -> AdvertiseSettings.ADVERTISE_TX_POWER_HIGH
+            else -> AdvertiseSettings.ADVERTISE_TX_POWER_MEDIUM
+        }
+
         val settings = AdvertiseSettings.Builder()
-            .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_BALANCED)
-            .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_MEDIUM)
-            .setConnectable(true) // Allow client devices to connect directly
-            .setTimeout(0) // Continuous advertising loop
+            .setAdvertiseMode(advMode)
+            .setTxPowerLevel(txPower)
+            .setConnectable(true) // Allow direct client handshake and discovery
+            .setTimeout(0)
             .build()
 
         val pUuid = ParcelUuid(Constants.SERVICE_UUID)
-        val data = AdvertiseData.Builder()
-            .setIncludeDeviceName(false)
+
+        // Optimise BLE advertising data to include Service UUID and Device name correctly so scanner apps discover it easily
+        val dataBuilder = AdvertiseData.Builder()
+            .setIncludeDeviceName(showName)
+            .setIncludeTxPowerLevel(true)
             .addServiceUuid(pUuid)
-            .build()
+
+        val data = dataBuilder.build()
 
         try {
             bluetoothAdvertiser?.startAdvertising(settings, data, advertiseCallback)
-            ServiceState.addLog("Started Connectable BLE Advertising for UUID: ${Constants.SERVICE_UUID}")
+            ServiceState.addLog("Started Connectable BLE Advertising for UUID: ${Constants.SERVICE_UUID} (ShowName=$showName, TxPower=$txPowerStr)")
         } catch (e: Exception) {
             ServiceState.addLog("Failed to start BLE advertising: ${e.message}", isError = true)
         }
@@ -189,20 +222,37 @@ class LocalBleService : Service() {
             BluetoothGattService.SERVICE_TYPE_PRIMARY
         )
 
-        // Write-Only Characteristic with security permission
-        val characteristic = BluetoothGattCharacteristic(
+        // Write-Only Trigger Characteristic
+        val triggerCharacteristic = BluetoothGattCharacteristic(
             Constants.CHARACTERISTIC_UUID,
             BluetoothGattCharacteristic.PROPERTY_WRITE,
             BluetoothGattCharacteristic.PERMISSION_WRITE
         )
 
-        service.addCharacteristic(characteristic)
+        // Write Secure Command/Action Characteristic (Allows extension of commands via handshake + command byte)
+        val cmdCharacteristic = BluetoothGattCharacteristic(
+            Constants.COMMAND_CHARACTERISTIC_UUID,
+            BluetoothGattCharacteristic.PROPERTY_WRITE,
+            BluetoothGattCharacteristic.PERMISSION_WRITE
+        )
+
+        // Secure Read-Only Status Characteristic (battery, status, stats)
+        val statusCharacteristic = BluetoothGattCharacteristic(
+            Constants.STATUS_CHARACTERISTIC_UUID,
+            BluetoothGattCharacteristic.PROPERTY_READ,
+            BluetoothGattCharacteristic.PERMISSION_READ
+        )
+
+        service.addCharacteristic(triggerCharacteristic)
+        service.addCharacteristic(cmdCharacteristic)
+        service.addCharacteristic(statusCharacteristic)
+
         val added = gattServer?.addService(service) ?: false
         if (added) {
             ServiceState.setGattActive(true)
-            ServiceState.addLog("Gatt Server initialized with Write Characteristic: ${Constants.CHARACTERISTIC_UUID}")
+            ServiceState.addLog("GATT Server initialized. Custom, commands and status characteristics are registered.")
         } else {
-            ServiceState.addLog("Error adding GATT Service to server", isError = true)
+            ServiceState.addLog("Error adding Secure GATT Services to server", isError = true)
         }
     }
 
@@ -229,7 +279,7 @@ class LocalBleService : Service() {
     private fun syncAcousticDetectorState() {
         if (isAcousticEnabled) {
             if (acousticDetector == null) {
-                acousticDetector = AcousticDetector { reason ->
+                acousticDetector = AcousticDetector(this) { reason ->
                     ServiceState.addLog("Sound Trigger: $reason", isSuccess = true)
                     alarmController.startAlarm(serviceScope)
                     ServiceState.setAlarmRinging(true)
@@ -261,11 +311,43 @@ class LocalBleService : Service() {
                 ServiceState.addLog("Remote device connected via BLE: $address")
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 ServiceState.addLog("Remote device disconnected: $address")
+                authenticatedClients.remove(address)
             }
         }
 
         /**
-         * Triggered when a remote client device writes to our secure Write-Only Characteristic.
+         * Support Reading Status information after handshake verification.
+         */
+        @SuppressLint("MissingPermission")
+        override fun onCharacteristicReadRequest(
+            device: BluetoothDevice?,
+            requestId: Int,
+            offset: Int,
+            characteristic: BluetoothGattCharacteristic?
+        ) {
+            super.onCharacteristicReadRequest(device, requestId, offset, characteristic)
+            Log.d(TAG, "GATT Read Request received on characteristic ${characteristic?.uuid}")
+
+            val address = device?.address ?: ""
+            if (characteristic?.uuid == Constants.STATUS_CHARACTERISTIC_UUID) {
+                // GATT Security check: ensure client successfully solved handshake before returning telemetry
+                if (authenticatedClients.contains(address)) {
+                    val statusString = "BAT:85|ALM:${if (alarmController.isRinging()) 1 else 0}|TRG:${ServiceState.verifiedTriggersCount.value}"
+                    val dataBytes = statusString.toByteArray(Charsets.UTF_8)
+                    val slicedBytes = if (offset < dataBytes.size) dataBytes.copyOfRange(offset, dataBytes.size) else byteArrayOf()
+                    gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, slicedBytes)
+                    ServiceState.addLog("Telemetry Status requested and sent over BLE.")
+                } else {
+                    gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_READ_NOT_PERMITTED, offset, byteArrayOf())
+                    ServiceState.addLog("Security status read rejected for unauthenticated client device: $address", isError = true)
+                }
+            } else {
+                gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_FAILURE, offset, byteArrayOf())
+            }
+        }
+
+        /**
+         * Triggered when a remote client device writes to our secure characteristics.
          * Performs cryptographic/pre-shared token handshake validation.
          */
         @SuppressLint("MissingPermission")
@@ -285,34 +367,102 @@ class LocalBleService : Service() {
             var isValid = false
             val expectedBytes = hexStringToByteArray(activePasscodeHex)
 
+            val address = device?.address ?: ""
             if (characteristic?.uuid == Constants.CHARACTERISTIC_UUID && value != null) {
                 if (Arrays.equals(value, expectedBytes)) {
                     isValid = true
                 }
+
+                if (responseNeeded) {
+                    val statusCode = if (isValid) BluetoothGatt.GATT_SUCCESS else BluetoothGatt.GATT_FAILURE
+                    gattServer?.sendResponse(device, requestId, statusCode, offset, value)
+                }
+
+                if (isValid) {
+                    authenticatedClients.add(address)
+                    ServiceState.incrementVerifiedTriggers()
+                    ServiceState.addLog(
+                        "VALID SECURITY HANDSHAKE (0x${activePasscodeHex})! Triggering high-volume alarm!",
+                        isSuccess = true
+                    )
+                    alarmController.startAlarm(serviceScope)
+                    ServiceState.setAlarmRinging(true)
+                    updateNotification(isRinging = true)
+                } else {
+                    ServiceState.incrementRejectedAttempts()
+                    val receivedHex = value?.joinToString("") { "%02X".format(it) } ?: "null"
+                    ServiceState.addLog(
+                        "SECURITY REJECTED: Invalid trigger payload 0x$receivedHex",
+                        isError = true
+                    )
+                }
+                return
             }
 
-            // Send GATT Response if client requested response
-            if (responseNeeded) {
-                val statusCode = if (isValid) BluetoothGatt.GATT_SUCCESS else BluetoothGatt.GATT_FAILURE
-                gattServer?.sendResponse(device, requestId, statusCode, offset, value)
-            }
+            // Secure Extensible Config/Command Characteristic UUID (passcode + command byte + dynamic payload)
+            if (characteristic?.uuid == Constants.COMMAND_CHARACTERISTIC_UUID && value != null) {
+                // Must have at least 5 bytes (4 bytes passcode + 1 byte command code)
+                if (value.size >= 5) {
+                    val receivedPasscode = value.copyOfRange(0, 4)
+                    if (Arrays.equals(receivedPasscode, expectedBytes)) {
+                        isValid = true
+                        authenticatedClients.add(address)
+                        val commandCode = value[4]
 
-            if (isValid) {
-                ServiceState.incrementVerifiedTriggers()
-                ServiceState.addLog(
-                    "VALID SECURITY TOKEN RECEIVED (0x${activePasscodeHex})! Triggering high-volume alarm!",
-                    isSuccess = true
-                )
-                alarmController.startAlarm(serviceScope)
-                ServiceState.setAlarmRinging(true)
-                updateNotification(isRinging = true)
-            } else {
-                ServiceState.incrementRejectedAttempts()
-                val receivedHex = value?.joinToString("") { "%02X".format(it) } ?: "null"
-                ServiceState.addLog(
-                    "SECURITY REJECTED: Invalid payload 0x$receivedHex from ${device?.address}",
-                    isError = true
-                )
+                        if (responseNeeded) {
+                            gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, value)
+                        }
+
+                        ServiceState.incrementVerifiedTriggers()
+
+                        when (commandCode) {
+                            Constants.CMD_TRIGGER_FULL_ALARM -> {
+                                ServiceState.addLog("BLE Command: Trigger Full Alarm", isSuccess = true)
+                                alarmController.startAlarm(serviceScope)
+                                ServiceState.setAlarmRinging(true)
+                                updateNotification(isRinging = true)
+                            }
+                            Constants.CMD_SILENCE_ALARM -> {
+                                ServiceState.addLog("BLE Command: Silence Alarm", isSuccess = true)
+                                alarmController.stopAlarm()
+                                ServiceState.setAlarmRinging(false)
+                                updateNotification(isRinging = false)
+                            }
+                            Constants.CMD_STROBE_ONLY -> {
+                                ServiceState.addLog("BLE Command: Trigger Strobe LED Only", isSuccess = true)
+                                alarmController.startAlarm(serviceScope, strobeOnly = true)
+                                ServiceState.setAlarmRinging(true)
+                                updateNotification(isRinging = true)
+                            }
+                            Constants.CMD_SOUND_ONLY -> {
+                                ServiceState.addLog("BLE Command: Trigger Sound Only", isSuccess = true)
+                                alarmController.startAlarm(serviceScope, soundOnly = true)
+                                ServiceState.setAlarmRinging(true)
+                                updateNotification(isRinging = true)
+                            }
+                            Constants.CMD_UPDATE_SETTINGS -> {
+                                val extraPayload = if (value.size > 5) value.copyOfRange(5, value.size).joinToString("") { "%02X".format(it) } else "none"
+                                ServiceState.addLog("BLE Command: Settings update request ($extraPayload)", isSuccess = true)
+                            }
+                            Constants.CMD_CUSTOM_ACTION -> {
+                                val customVal = if (value.size > 5) value[5].toInt() else 0
+                                ServiceState.addLog("BLE Command: Executed Extensible Custom Action #$customVal", isSuccess = true)
+                            }
+                            else -> {
+                                ServiceState.addLog("BLE Command: Unknown Command Code $commandCode received.", isError = true)
+                            }
+                        }
+                    }
+                }
+
+                if (!isValid) {
+                    ServiceState.incrementRejectedAttempts()
+                    if (responseNeeded) {
+                        gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_FAILURE, offset, value)
+                    }
+                    val receivedHex = value.joinToString("") { "%02X".format(it) }
+                    ServiceState.addLog("BLE Command Rejected: Unauthorized payload 0x$receivedHex", isError = true)
+                }
             }
         }
     }
